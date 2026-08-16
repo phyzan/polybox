@@ -4,6 +4,8 @@
 #include <utility>
 #include <cassert>
 #include <type_traits>
+#include <memory>
+#include <concepts>
 
 #define PBOX_FORCE_INLINE __attribute__((always_inline)) inline
 
@@ -19,7 +21,8 @@ class Box;
 // provides value semantics through a required clone() method.
 //
 // Requirements:
-//   - Type must have: Type* clone() const
+//   - Type must have: std::unique_ptr<Type> clone() const
+//     (or a std::unique_ptr<Derived> convertible to std::unique_ptr<Type>)
 //
 // Ownership:
 //   - Copy: deep copy via clone()
@@ -32,10 +35,11 @@ class owner {
     static_assert(std::is_same_v<Type, std::decay_t<Type>>, "Type cannot be a reference");
     static_assert(!std::is_pointer_v<Type>, "Type cannot be a pointer");
 
-public:
+    static_assert(requires(const Type& t) {
+        { t.clone() } -> std::convertible_to<std::unique_ptr<Type>>;
+    }, "Type must have a clone() method returning a std::unique_ptr<Type> (or a std::unique_ptr<Derived> convertible to std::unique_ptr<Type>)");
 
-    // Takes ownership of a raw pointer
-    PBOX_FORCE_INLINE explicit owner(Type* object) : ptr(object) {}
+public:
 
     // Constructs Type in-place with forwarded arguments
     // template<typename... Args>
@@ -47,11 +51,15 @@ public:
     PBOX_FORCE_INLINE ~owner() { delete ptr; }
 
     // Deep copy via clone()
-    PBOX_FORCE_INLINE explicit owner(const owner& other) : ptr(other.ptr ? other.ptr->clone() : nullptr) {}
+    PBOX_FORCE_INLINE explicit owner(const owner& other) : ptr(other.ptr ? other.ptr->clone().release() : nullptr) {}
 
     template<typename U>
     requires (std::is_convertible_v<U*, Type*>)
     PBOX_FORCE_INLINE owner(Box<U> box) : ptr(box.release()) {}
+
+    template<typename U>
+    requires (std::is_convertible_v<U*, Type*>)
+    PBOX_FORCE_INLINE owner(std::unique_ptr<U> box) : ptr(box.release()) {}
 
     // Move: transfers ownership
     PBOX_FORCE_INLINE owner(owner&& other) noexcept : ptr(other.ptr) {
@@ -62,7 +70,7 @@ public:
     PBOX_FORCE_INLINE owner& operator=(const owner& other) {
         if (&other != this) {
             delete ptr;
-            ptr = other.ptr ? other.ptr->clone() : nullptr;
+            ptr = other.ptr ? other.ptr->clone().release() : nullptr;
         }
         return *this;
     }
@@ -78,10 +86,21 @@ public:
     }
 
     // Take ownership from a Box
-    PBOX_FORCE_INLINE owner& operator=(Box<Type>&& box) {
+    template<typename U>
+    requires (std::is_convertible_v<U*, Type*>)
+    PBOX_FORCE_INLINE owner& operator=(Box<U> box) {
         delete ptr;
         ptr = box.ptr;
         box.ptr = nullptr;
+        return *this;
+    }
+
+    // Take ownership from a unique_ptr
+    template<typename U>
+    requires (std::is_convertible_v<U*, Type*>)
+    PBOX_FORCE_INLINE owner& operator=(std::unique_ptr<U> box) {
+        delete ptr;
+        ptr = box.release();
         return *this;
     }
 
@@ -110,7 +129,7 @@ public:
     PBOX_FORCE_INLINE Box<Derived> move_cast() {
         Type* tmp = ptr;
         if constexpr (std::is_polymorphic_v<Type>) {
-            if (Derived* derived = dynamic_cast<Derived*>(tmp)) {
+            if (auto* derived = dynamic_cast<Derived*>(tmp)) {
                 ptr = nullptr;
                 return Box<Derived>(derived);
             }
@@ -146,6 +165,10 @@ public:
 
 protected:
     Type* ptr = nullptr;
+
+private:
+    // Takes ownership of a raw pointer
+    PBOX_FORCE_INLINE explicit owner(Type* object) : ptr(object) {}
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -217,6 +240,9 @@ private:
     template<typename U, typename... Args>
     friend Box<U> make_box(Args&&... args);
 
+    template<template<typename...> typename U, typename... Args>
+    friend auto make_template_box(Args&&... args);
+
     // Private: only owner can construct
     PBOX_FORCE_INLINE explicit Box(T* object) : ptr(object) {}
 
@@ -234,6 +260,11 @@ private:
 template<typename Type, typename... Args>
 PBOX_FORCE_INLINE Box<Type> make_box(Args&&... args) {
     return Box<Type>(new Type(std::forward<Args>(args)...));
+}
+
+template<template<typename...> typename Type, typename... Args>
+PBOX_FORCE_INLINE auto make_template_box(Args&&... args) {
+    return Box(new Type(std::forward<Args>(args)...));
 }
 
 } // namespace pbox
