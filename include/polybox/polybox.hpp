@@ -172,6 +172,10 @@ public:
         return temp;
     }
 
+    explicit operator bool() const {
+        return ptr != nullptr;
+    }
+
 protected:
     Type* ptr = nullptr;
 
@@ -261,7 +265,8 @@ public:
         return ptr;
     }
 
-    PBOX_FORCE_INLINE operator bool() const {
+    PBOX_FORCE_INLINE
+    explicit operator bool() const {
         return ptr != nullptr;
     }
 
