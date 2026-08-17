@@ -21,8 +21,7 @@ class Box;
 // provides value semantics through a required clone() method.
 //
 // Requirements:
-//   - Type must have: std::unique_ptr<Type> clone() const
-//     (or a std::unique_ptr<Derived> convertible to std::unique_ptr<Type>)
+//   - Type must have: std::unique_ptr<DerivedOrBaseOfType> clone() const
 //
 // Ownership:
 //   - Copy: deep copy via clone()
@@ -35,15 +34,19 @@ class owner {
     static_assert(std::is_same_v<Type, std::decay_t<Type>>, "Type cannot be a reference");
     static_assert(!std::is_pointer_v<Type>, "Type cannot be a pointer");
 
-    static_assert(requires(const Type& t) {
-        { t.clone() } -> std::convertible_to<std::unique_ptr<Type>>;
-    }, "Type must have a clone() method returning a std::unique_ptr<Type> (or a std::unique_ptr<Derived> convertible to std::unique_ptr<Type>)");
+    static constexpr bool clone_is_derived = requires(const Type& item) {
+        { item.clone() } -> std::convertible_to<std::unique_ptr<Type>>;
+    };
+
+    static constexpr bool clone_is_base = !clone_is_derived && requires(const Type& item){
+        { item.clone() };
+        requires std::convertible_to<std::unique_ptr<Type>, decltype(item.clone())>;
+    };
+
+    static_assert(
+    clone_is_derived || clone_is_base, "Type must have a clone() method whose return type is convertible to or from std::unique_ptr<Type>");
 
 public:
-
-    // Constructs Type in-place with forwarded arguments
-    // template<typename... Args>
-    // explicit owner(Args&&... args) : ptr(new Type(std::forward<Args>(args)...)) {}
 
     // Default constructs to null
     constexpr owner() = default;
@@ -51,26 +54,32 @@ public:
     PBOX_FORCE_INLINE ~owner() { delete ptr; }
 
     // Deep copy via clone()
-    PBOX_FORCE_INLINE explicit owner(const owner& other) : ptr(other.ptr ? other.ptr->clone().release() : nullptr) {}
+    PBOX_FORCE_INLINE owner(const owner& other) requires clone_is_derived : ptr(other.ptr ? other->clone().release() : nullptr) {}
 
-    template<typename U>
-    requires (std::is_convertible_v<U*, Type*>)
-    PBOX_FORCE_INLINE owner(Box<U> box) : ptr(box.release()) {}
-
-    template<typename U>
-    requires (std::is_convertible_v<U*, Type*>)
-    PBOX_FORCE_INLINE owner(std::unique_ptr<U> box) : ptr(box.release()) {}
+    PBOX_FORCE_INLINE owner(const owner& other) requires clone_is_base : ptr(other.ptr ? static_cast<Type*>(other->clone().release()) : nullptr) {}
 
     // Move: transfers ownership
     PBOX_FORCE_INLINE owner(owner&& other) noexcept : ptr(other.ptr) {
         other.ptr = nullptr;
     }
 
+    template<typename U>
+    requires (std::is_convertible_v<U*, Type*>)
+    PBOX_FORCE_INLINE owner(Box<U>&& box) noexcept : ptr(box.release()) {}
+
+    template<typename U>
+    requires (std::is_convertible_v<U*, Type*>)
+    PBOX_FORCE_INLINE owner(std::unique_ptr<U>&& box) noexcept : ptr(box.release()) {}
+
     // Copy assignment: deep copy via clone()
     PBOX_FORCE_INLINE owner& operator=(const owner& other) {
         if (&other != this) {
             delete ptr;
-            ptr = other.ptr ? other.ptr->clone().release() : nullptr;
+            if constexpr (clone_is_derived){
+                ptr = other.ptr ? other.ptr->clone().release() : nullptr;
+            } else {
+                ptr = other.ptr ? static_cast<Type*>(other.ptr->clone().release()) : nullptr;
+            }            
         }
         return *this;
     }
@@ -88,7 +97,7 @@ public:
     // Take ownership from a Box
     template<typename U>
     requires (std::is_convertible_v<U*, Type*>)
-    PBOX_FORCE_INLINE owner& operator=(Box<U> box) {
+    PBOX_FORCE_INLINE owner& operator=(Box<U>&& box) noexcept {
         delete ptr;
         ptr = box.ptr;
         box.ptr = nullptr;
@@ -98,7 +107,7 @@ public:
     // Take ownership from a unique_ptr
     template<typename U>
     requires (std::is_convertible_v<U*, Type*>)
-    PBOX_FORCE_INLINE owner& operator=(std::unique_ptr<U> box) {
+    PBOX_FORCE_INLINE owner& operator=(std::unique_ptr<U>&& box) {
         delete ptr;
         ptr = box.release();
         return *this;
@@ -141,9 +150,9 @@ public:
     }
 
     // Non-owning cast for const access (returns raw pointer)
-    template<typename Derived>
-    PBOX_FORCE_INLINE const Derived* cast() const {
-        return static_cast<const Derived*>(ptr);
+    template<typename T>
+    PBOX_FORCE_INLINE const T* cast() const {
+        return static_cast<const T*>(ptr);
     }
 
     PBOX_FORCE_INLINE const Type* get() const {
@@ -203,6 +212,10 @@ public:
         other.ptr = nullptr;
     }
 
+    template<typename U>
+    requires (std::is_convertible_v<U*, T*>)
+    Box(std::unique_ptr<U>&& other) noexcept : ptr(other.release()) {}
+
     // Move assignment: transfers ownership
     PBOX_FORCE_INLINE Box& operator=(Box&& other) noexcept {
         if (this != &other) {
@@ -213,9 +226,32 @@ public:
         return *this;
     }
 
+    template<typename U>
+    requires (std::is_convertible_v<U*, T*>)
+    PBOX_FORCE_INLINE Box& operator=(std::unique_ptr<U>&& uptr) {
+        delete ptr;
+        ptr = uptr.release();
+        return *this;
+    }
+
+    template<typename U>
+    requires (std::is_convertible_v<U*, T*>)
+    PBOX_FORCE_INLINE Box& operator=(Box<U>&& box) noexcept {
+        delete ptr;
+        ptr = box.ptr;
+        box.ptr = nullptr;
+        return *this;
+    }
+
     // No copy
     Box(const Box&) = delete;
     Box& operator=(const Box&) = delete;
+
+    PBOX_FORCE_INLINE T* release() {
+        T* temp = ptr;
+        ptr = nullptr;
+        return temp;
+    }
 
     PBOX_FORCE_INLINE ~Box() { delete ptr; }
 
@@ -245,13 +281,6 @@ private:
 
     // Private: only owner can construct
     PBOX_FORCE_INLINE explicit Box(T* object) : ptr(object) {}
-
-    // Private: only owner can move
-    PBOX_FORCE_INLINE T* release() {
-        T* temp = ptr;
-        ptr = nullptr;
-        return temp;
-    }
 
     T* ptr = nullptr;
 };
