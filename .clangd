@@ -9,6 +9,7 @@ CompileFlags:
     - "-Wshadow"
     - "-fno-math-errno"
     - "-Wno-sign-conversion"
+    - "-Iinclude"
   Compiler: clang++
 
 Index:
