@@ -155,7 +155,11 @@ public:
         return static_cast<const T*>(ptr);
     }
 
-    PBOX_FORCE_INLINE const Type* get() const {
+    PBOX_FORCE_INLINE const Type* get_raw_pointer() const {
+        return ptr;
+    }
+
+    PBOX_FORCE_INLINE Type* get_raw_pointer() {
         return ptr;
     }
 
@@ -250,6 +254,14 @@ public:
     // No copy
     Box(const Box&) = delete;
     Box& operator=(const Box&) = delete;
+
+    PBOX_FORCE_INLINE T* get_raw_pointer() {
+        return ptr;
+    }
+
+    PBOX_FORCE_INLINE const T* get_raw_pointer() const {
+        return ptr;
+    }
 
     PBOX_FORCE_INLINE T* release() {
         T* temp = ptr;
