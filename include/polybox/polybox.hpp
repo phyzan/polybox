@@ -124,6 +124,16 @@ public:
         return ptr;
     }
 
+    PBOX_FORCE_INLINE Type& operator*() {
+        assert(ptr != nullptr && "dereferencing null owner");
+        return *ptr;
+    }
+
+    PBOX_FORCE_INLINE const Type& operator*() const {
+        assert(ptr != nullptr && "dereferencing null owner");
+        return *ptr;
+    }
+
     owner& steal(Type* obj){
         assert(obj != ptr && "Attempted to reassign the same pointer");
         delete ptr;
@@ -275,6 +285,11 @@ public:
     PBOX_FORCE_INLINE T* operator->() const {
         assert(ptr != nullptr && "dereferencing null Box");
         return ptr;
+    }
+
+    PBOX_FORCE_INLINE T& operator*() const {
+        assert(ptr != nullptr && "dereferencing null Box");
+        return *ptr;
     }
 
     PBOX_FORCE_INLINE
